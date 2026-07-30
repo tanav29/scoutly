@@ -13,5 +13,8 @@ wheels/
 # Vscode
 .vscode
 scraped
+data/
+web/node_modules/
+web/.next/
 
 .ruff_cache

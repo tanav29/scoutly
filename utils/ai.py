@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 from langchain_community.vectorstores import FAISS
@@ -8,7 +9,7 @@ from pypdf import PdfReader
 
 # Centralized model configuration
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "embeddinggemma")
-LLM_MODEL = os.getenv("LLM_MODEL", "minimax-m2.5:cloud")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemma3:270m")
 
 # Initialize embeddings and LLM
 embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
@@ -264,8 +265,19 @@ REFINED_QUERY: if not sufficient, a better search query to find missing informat
         }
 
 
-async def ai_finder(folder_name: str, topic: str = "") -> FAISS:
-    """Process scraped text and PDFs, create embeddings, and build FAISS vector store."""
+async def ai_finder(
+    folder_name: str, topic: str = "", allowed_files: set[str] | None = None
+) -> FAISS:
+    """Load or build the FAISS vector store for the selected source files."""
+
+    selected_files = sorted(allowed_files) if allowed_files is not None else []
+    index_key = hashlib.sha256("\n".join(selected_files).encode()).hexdigest()[:16]
+    index_dir = os.path.join(folder_name, ".faiss", index_key)
+    index_file = os.path.join(index_dir, "index.faiss")
+    if os.path.exists(index_file):
+        return FAISS.load_local(
+            index_dir, embeddings, allow_dangerous_deserialization=True
+        )
 
     all_documents = []
 
@@ -290,10 +302,12 @@ async def ai_finder(folder_name: str, topic: str = "") -> FAISS:
 
     # Process each file in the folder
     for filename in os.listdir(folder_name):
+        if allowed_files is not None and filename not in allowed_files:
+            continue
         filepath = os.path.join(folder_name, filename)
         source_url = source_map.get(filename, filename)
 
-        if filename.endswith(".md") and filename != "SOURCES.md":
+        if filename.endswith((".md", ".markdown", ".txt")) and filename != "SOURCES.md":
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -326,9 +340,7 @@ async def ai_finder(folder_name: str, topic: str = "") -> FAISS:
                 continue
 
     if not all_documents:
-        all_documents = [
-            Document(page_content="No content found", metadata={"source": "fallback"})
-        ]
+        raise ValueError("The selected sources contain no readable text")
 
     # Split documents into chunks
     text_splitter = RecursiveCharacterTextSplitter(
@@ -339,8 +351,9 @@ async def ai_finder(folder_name: str, topic: str = "") -> FAISS:
 
     chunks = text_splitter.split_documents(all_documents)
 
-    # Create FAISS vector store
     vectorstore = FAISS.from_documents(chunks, embeddings)
+    os.makedirs(index_dir, exist_ok=True)
+    vectorstore.save_local(index_dir)
 
     return vectorstore
 
@@ -349,11 +362,19 @@ async def ai_main(vectorstore: FAISS, user_prompt: str) -> tuple[str, list[str]]
     """Retrieve relevant information and generate response using Gemma 3."""
 
     # Retrieve relevant documents
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
     relevant_docs = await retriever.ainvoke(user_prompt)
 
-    # Combine the content
-    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+    if not relevant_docs:
+        raise ValueError("No relevant source content was retrieved")
+
+    context = "\n\n".join(
+        f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}"
+        for doc in relevant_docs
+        if doc.page_content.strip()
+    )
+    if not context:
+        raise ValueError("Retrieved source content was empty")
 
     # Extract sources
     sources = list(
@@ -362,15 +383,15 @@ async def ai_main(vectorstore: FAISS, user_prompt: str) -> tuple[str, list[str]]
 
     # Create prompt with context
     full_prompt = f"""You are an answer engine that provides accurate, well-reasoned, and practical responses.
-        Use the provided context to ground your answer, but do not mention the context directly.
-        If the answer is uncertain, acknowledge briefly and provide the most likely correct information.
+        Answer only from the provided source context. If the answer is not present in the context, say that the selected sources do not contain enough information.
+        Do not invent facts or use outside knowledge.
         Organize your response for readability using sections or bullet points when helpful.
         Prioritize: factual correctness, efficiency, and actionable advice.
         Avoid asking follow-up questions.
         Avoid phrases that weaken confidence (e.g., "this might help" -> "do this for better results").
         Keep the tone direct, clear, and concise.
 
-        Based on the following information:
+        SOURCE CONTEXT:
 
         {context}
 
