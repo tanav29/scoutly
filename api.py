@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from utils.providers import grounded_completion
-from utils.vector_store import upsert as vector_upsert, query as vector_query
+from utils.vector_store import upsert as vector_upsert, query as vector_query, count_for_source as vector_count
 
 ROOT = Path(os.getenv("SCOUTLY_DATA_DIR", "data"))
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -306,10 +306,19 @@ def create_source(title: str, source_type: str, raw: bytes, mime: str, canonical
 
 @app.get("/api/sources")
 async def sources(search: str | None = None, state: str | None = None) -> list[dict[str, Any]]:
-    connection = db(); query = "SELECT s.*,GROUP_CONCAT(c.name) AS collection_names FROM sources s LEFT JOIN collection_sources cs ON cs.source_id=s.id LEFT JOIN collections c ON c.id=cs.collection_id WHERE s.workspace_id=? AND s.deleted_at IS NULL"; params: list[Any] = [WORKSPACE_ID]
+    connection = db(); query = "SELECT s.*, (SELECT COUNT(*) FROM chunks ch WHERE ch.source_id=s.id) AS chunk_count, GROUP_CONCAT(c.name) AS collection_names FROM sources s LEFT JOIN collection_sources cs ON cs.source_id=s.id LEFT JOIN collections c ON c.id=cs.collection_id WHERE s.workspace_id=? AND s.deleted_at IS NULL"; params: list[Any] = [WORKSPACE_ID]
     if search: query += " AND (s.title LIKE ? OR s.canonical_url LIKE ?)"; params += [f"%{search}%", f"%{search}%"]
     if state: query += " AND s.state=?"; params.append(state)
-    query += " GROUP BY s.id ORDER BY s.created_at DESC"; rows = connection.execute(query, params).fetchall(); connection.close(); return [dict(row) for row in rows]
+    query += " GROUP BY s.id ORDER BY s.created_at DESC"; rows = connection.execute(query, params).fetchall(); connection.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        chunks = item.pop("chunk_count", None)
+        item["chunk_count"] = chunks if chunks is not None else 0
+        item["vector_count"] = vector_count(item["id"]) if item["state"] == "ready" else 0
+        item["indexed"] = item["state"] == "ready" and item["vector_count"] > 0
+        result.append(item)
+    return result
 
 
 @app.post("/api/sources/upload")

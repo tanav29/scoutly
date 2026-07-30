@@ -62,3 +62,9 @@ def query(text: str, source_ids: list[str], limit: int = 6) -> list[str]:
         where={"source_id": {"$in": source_ids}},
     )
     return result.get("ids", [[]])[0]
+
+
+def count_for_source(source_id: str) -> int:
+    """Return the number of embedded chunks persisted for one source."""
+    result = _collection.get(where={"source_id": source_id}, include=[])
+    return len(result.get("ids", []))
