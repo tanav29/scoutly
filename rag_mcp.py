@@ -12,13 +12,26 @@ from pypdf import PdfReader
 
 from openai import OpenAI
 from activity import audit
+import settings
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 
-def embed(texts: list[str]) -> list[list[float]]:
-    """Embed text with OpenAI; OPENAI_API_KEY must be configured."""
-    result = OpenAI().embeddings.create(model=EMBEDDING_MODEL, input=texts)
+def embed(texts: list[str], model: str | None = None, provider: str | None = None) -> list[list[float]]:
+    """Embed with the collection's model, using the current provider credentials."""
+    config = settings.load()
+    model = model or config["model"]
+    provider = provider or config["provider"]
+    if provider == "ollama":
+        response = httpx.post("http://127.0.0.1:11434/api/embed", json={"model": model, "input": texts}, timeout=120)
+        response.raise_for_status()
+        return response.json()["embeddings"]
+    if provider != "openai":
+        raise ValueError("Unsupported embedding provider")
+    api_key = settings.key(config)
+    if not api_key:
+        raise ValueError("Set an OpenAI API key in dashboard settings or OPENAI_API_KEY")
+    result = OpenAI(api_key=api_key).embeddings.create(model=model, input=texts)
     return [item.embedding for item in sorted(result.data, key=lambda item: item.index)]
 
 
@@ -35,8 +48,8 @@ def client():
 
 def collection(name):
     col = client().get_collection(name)
-    if (col.metadata or {}).get("embedding_model") != EMBEDDING_MODEL:
-        raise ValueError("Collection uses an incompatible or unknown embedding model. Create a new collection and re-ingest its documents.")
+    if not (col.metadata or {}).get("embedding_model"):
+        raise ValueError("Collection has no known embedding model; create a new collection and re-ingest its documents.")
     return col
 
 
@@ -54,7 +67,7 @@ def ingest_text(collection_name, text, source, metadata=None):
     ids = [f"{doc_id}-{i}" for i in range(len(chunks))]
     # Remove stale chunks when a document becomes shorter.
     old = col.get(where={"document_id": doc_id}, include=[])["ids"]
-    col.upsert(ids=ids, documents=chunks, embeddings=embed(chunks), metadatas=[{**metadata, "document_id": doc_id, "source": source, "ordinal": i} for i in range(len(chunks))])
+    col.upsert(ids=ids, documents=chunks, embeddings=embed(chunks, col.metadata["embedding_model"], col.metadata.get("embedding_provider", "openai")), metadatas=[{**metadata, "document_id": doc_id, "source": source, "ordinal": i} for i in range(len(chunks))])
     stale = list(set(old) - set(ids))
     if stale:
         col.delete(ids=stale)
@@ -65,7 +78,8 @@ def ingest_text(collection_name, text, source, metadata=None):
 @audit
 def create_collection(name: str) -> dict:
     """Create a named collection. Existing names are rejected."""
-    client().create_collection(name, metadata={"hnsw:space": "cosine", "embedding_model": EMBEDDING_MODEL})
+    config = settings.load()
+    client().create_collection(name, metadata={"hnsw:space": "cosine", "embedding_model": config["model"], "embedding_provider": config["provider"]})
     return {"name": name}
 
 
@@ -173,7 +187,7 @@ def delete_document(collection_name: str, document_id: str) -> dict:
 def collection_info(collection_name: str) -> dict:
     """Inspect the collection's embedding model and stored chunk count."""
     col = collection(collection_name)
-    return {"name": collection_name, "chunks": col.count(), "embedding_model": EMBEDDING_MODEL}
+    return {"name": collection_name, "chunks": col.count(), "embedding_model": col.metadata["embedding_model"], "embedding_provider": col.metadata.get("embedding_provider", "openai")}
 
 
 @mcp.tool()
@@ -215,7 +229,7 @@ def search(collection_name: str, query: str, limit: int = 6, mode: str = "semant
     # Hybrid needs the full filtered corpus to avoid excluding lexical matches.
     if mode == "hybrid":
         data = col.get(where=where, include=["documents", "metadatas", "embeddings"])
-        q = embed([query])[0]
+        q = embed([query], col.metadata["embedding_model"], col.metadata.get("embedding_provider", "openai"))[0]
         terms = set(re.findall(r"\w+", query.lower()))
         rows = []
         for ident, doc, meta, vec in zip(data["ids"], data["documents"], data["metadatas"], data["embeddings"]):
@@ -227,7 +241,7 @@ def search(collection_name: str, query: str, limit: int = 6, mode: str = "semant
         return sorted(rows, key=lambda row: row["score"], reverse=True)[:limit]
     if not col.count():
         return []
-    data = col.query(query_embeddings=embed([query]), n_results=min(limit, col.count()), where=where, include=["documents", "metadatas", "distances"])
+    data = col.query(query_embeddings=embed([query], col.metadata["embedding_model"], col.metadata.get("embedding_provider", "openai")), n_results=min(limit, col.count()), where=where, include=["documents", "metadatas", "distances"])
     return [{"id": i, "text": d, "metadata": m, "score": 1 - dist} for i,d,m,dist in zip(data["ids"][0], data["documents"][0], data["metadatas"][0], data["distances"][0])]
 
 

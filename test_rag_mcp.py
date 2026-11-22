@@ -8,7 +8,7 @@ import rag_mcp as server
 
 
 class RagServerTest(unittest.TestCase):
-    @patch.object(server, "embed", side_effect=lambda texts: [[1.0, 0.0] for _ in texts])
+    @patch.object(server, "embed", side_effect=lambda texts, *args: [[1.0, 0.0] for _ in texts])
     def test_document_lifecycle(self, mock_embed):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             os.environ['VECTORVAULT_DATA_DIR'] = directory

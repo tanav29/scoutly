@@ -10,6 +10,7 @@ from starlette.routing import Route
 
 import activity
 import rag_mcp
+import settings
 
 
 async def index(request):
@@ -20,7 +21,8 @@ async def overview(request):
     collections = []
     for col in rag_mcp.client().list_collections():
         collections.append({"name": col.name, "chunks": col.count(), "metadata": col.metadata or {}})
-    return JSONResponse({"collections": sorted(collections, key=lambda c: c["name"]), "data_dir": str(Path(os.getenv("VECTORVAULT_DATA_DIR", "data/vectorvault")).resolve()), "embedding_model": rag_mcp.EMBEDDING_MODEL, "api_key_configured": bool(os.getenv("OPENAI_API_KEY")), "logs": activity.recent()})
+    config = settings.load()
+    return JSONResponse({"collections": sorted(collections, key=lambda c: c["name"]), "data_dir": str(Path(os.getenv("VECTORVAULT_DATA_DIR", "data/vectorvault")).resolve()), "provider": config["provider"], "embedding_model": config["model"], "api_key_configured": bool(settings.key(config)), "logs": activity.recent()})
 
 
 async def documents(request):
@@ -38,7 +40,46 @@ async def documents(request):
     return JSONResponse({"documents": sorted(docs.values(), key=lambda doc: doc["source"])})
 
 
-app = Starlette(middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])], routes=[Route("/", index), Route("/api/overview", overview), Route("/api/collections/{name}/documents", documents)])
+async def action(request):
+    # Browser requests must originate from this dashboard; no CORS is enabled.
+    origin = request.headers.get("origin")
+    if origin != str(request.base_url).rstrip("/") or request.headers.get("content-type", "").split(";")[0] != "application/json":
+        return JSONResponse({"error": "Request must originate from the dashboard"}, status_code=403)
+    try:
+        payload = await request.json()
+        operation = request.path_params["operation"]
+        if operation == "settings":
+            config = settings.save(payload.get("provider"), payload.get("model"), payload.get("api_key"))
+            result = {"provider": config["provider"], "model": config["model"]}
+        elif operation == "create":
+            result = rag_mcp.create_collection(payload.get("name", ""))
+        elif operation == "ingest":
+            kind, collection_name = payload.get("kind"), payload.get("collection", "")
+            if kind == "text":
+                result = rag_mcp.ingest_content(collection_name, payload.get("content", ""), payload.get("source", ""))
+            elif kind == "file":
+                result = rag_mcp.ingest_document(collection_name, payload.get("source", ""))
+            elif kind == "folder":
+                result = rag_mcp.ingest_folder(collection_name, payload.get("source", ""))
+            elif kind == "url":
+                result = rag_mcp.ingest_url(collection_name, payload.get("source", ""))
+            else:
+                raise ValueError("Select a valid source type")
+        elif operation == "search":
+            result = rag_mcp.search(payload.get("collection", ""), payload.get("query", ""), mode=payload.get("mode", "hybrid"))
+        else:
+            return JSONResponse({"error": "Unknown action"}, status_code=404)
+        return JSONResponse({"result": result})
+    except Exception as exc:
+        # Avoid returning provider errors, which can contain sensitive request details.
+        if isinstance(exc, ValueError):
+            message = str(exc)
+        else:
+            message = f"{type(exc).__name__}: operation failed; check your model, credentials, and connection."
+        return JSONResponse({"error": message}, status_code=400)
+
+
+app = Starlette(middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])], routes=[Route("/", index), Route("/api/overview", overview), Route("/api/collections/{name}/documents", documents), Route("/api/{operation}", action, methods=["POST"])])
 
 if __name__ == "__main__":
     import uvicorn
