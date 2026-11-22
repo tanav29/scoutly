@@ -4,10 +4,19 @@ VectorVault provides a local dashboard and an MCP server for organizing and sear
 
 ## Start VectorVault
 
+From the project directory, install dependencies once:
+
 ```powershell
 uv sync --locked
+```
+
+Start the dashboard and MCP server:
+
+```powershell
 uv run --locked python dashboard.py
 ```
+
+Leave the terminal running while using VectorVault. Press `Ctrl+C` to stop it.
 
 Open http://127.0.0.1:8765. The dashboard and Streamable HTTP MCP server run together; the MCP endpoint is http://127.0.0.1:8765/mcp. Copy the agent setup prompt from the dashboard. Choose an embedding provider and model, create a collection, add sources, and test retrieval from the dashboard. Configure an answer model separately to ask questions against a collection and inspect the retrieved sources. Local files and folders must be accessible to the server. Supported files include UTF-8 text, Markdown and PDF; URLs must return HTML or plain text.
 
