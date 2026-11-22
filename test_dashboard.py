@@ -44,6 +44,38 @@ class DashboardTest(unittest.TestCase):
                 self.assertNotIn("test-secret", client.get("/api/overview").text)
             rag_mcp._client = None
 
+    def test_llm_settings_and_grounded_answer(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, patch.dict(os.environ, {"VECTORVAULT_DATA_DIR": directory}), patch.object(rag_mcp, "embed", side_effect=lambda texts, *args: [[1.0, 0.0] for _ in texts]), patch.object(rag_mcp.httpx, "post") as post:
+            rag_mcp._client = None
+            post.return_value.json.return_value = {"message": {"content": "An answer [Source 1]"}}
+            with TestClient(dashboard.app, base_url="http://localhost") as client:
+                headers = {"origin": "http://localhost"}
+                client.post("/api/create", headers=headers, json={"name": "answer_test"})
+                client.post("/api/ingest", headers=headers, json={"collection": "answer_test", "kind": "text", "source": "notes", "content": "A relevant fact"})
+                self.assertEqual(client.post("/api/llm-settings", json={"provider": "ollama", "model": "llama3.2"}).status_code, 403)
+                self.assertEqual(client.post("/api/llm-settings", headers=headers, json={"provider": "ollama", "model": "llama3.2"}).status_code, 200)
+                response = client.post("/api/answer", headers=headers, json={"collection": "answer_test", "question": "What fact?"})
+                self.assertEqual(response.status_code, 200)
+                result = response.json()["result"]
+                self.assertEqual(result["answer"], "An answer [Source 1]")
+                self.assertEqual(result["sources"][0]["metadata"]["source"], "notes")
+                self.assertEqual(post.call_args.kwargs["json"]["model"], "llama3.2")
+                self.assertIn("A relevant fact", post.call_args.kwargs["json"]["messages"][1]["content"])
+                overview = client.get("/api/overview").json()
+                self.assertEqual(overview["llm_model"], "llama3.2")
+                self.assertEqual(overview["collections"][0]["metadata"]["embedding_model"], "text-embedding-3-small")
+            rag_mcp._client = None
+
+    def test_openai_answer_uses_configured_model(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, patch.dict(os.environ, {"VECTORVAULT_DATA_DIR": directory}), patch.object(rag_mcp, "search", return_value=[{"text": "evidence", "metadata": {"source": "doc"}}]), patch.object(rag_mcp, "OpenAI") as openai:
+            import settings
+            settings.save("ollama", "nomic-embed-text", "example-key")
+            settings.save_llm("openai", "custom-model")
+            openai.return_value.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Result [Source 1]"))])
+            self.assertEqual(rag_mcp.answer_question("collection", "question")["answer"], "Result [Source 1]")
+            self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["model"], "custom-model")
+
 
 if __name__ == "__main__":
     unittest.main()

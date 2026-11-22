@@ -22,7 +22,7 @@ async def overview(request):
     for col in rag_mcp.client().list_collections():
         collections.append({"name": col.name, "chunks": col.count(), "metadata": col.metadata or {}})
     config = settings.load()
-    return JSONResponse({"collections": sorted(collections, key=lambda c: c["name"]), "data_dir": str(Path(os.getenv("VECTORVAULT_DATA_DIR", "data/vectorvault")).resolve()), "provider": config["provider"], "embedding_model": config["model"], "api_key_configured": bool(settings.key(config)), "logs": activity.recent()})
+    return JSONResponse({"collections": sorted(collections, key=lambda c: c["name"]), "data_dir": str(Path(os.getenv("VECTORVAULT_DATA_DIR", "data/vectorvault")).resolve()), "provider": config["provider"], "embedding_model": config["model"], "llm_provider": config["llm_provider"], "llm_model": config["llm_model"], "api_key_configured": bool(settings.key(config)), "logs": activity.recent()})
 
 
 async def documents(request):
@@ -51,6 +51,11 @@ async def action(request):
         if operation == "settings":
             config = settings.save(payload.get("provider"), payload.get("model"), payload.get("api_key"))
             result = {"provider": config["provider"], "model": config["model"]}
+        elif operation == "llm-settings":
+            config = settings.save_llm(payload.get("provider"), payload.get("model"))
+            result = {"provider": config["llm_provider"], "model": config["llm_model"]}
+        elif operation == "answer":
+            result = rag_mcp.answer_question(payload.get("collection", ""), payload.get("question", ""))
         elif operation == "create":
             result = rag_mcp.create_collection(payload.get("name", ""))
         elif operation == "ingest":
