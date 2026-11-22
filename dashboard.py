@@ -1,8 +1,10 @@
-"""Read-only local dashboard for VectorVault."""
+"""Local dashboard and Streamable HTTP MCP server."""
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 
 from starlette.applications import Starlette
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import FileResponse, JSONResponse
 from starlette.middleware import Middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -84,7 +86,26 @@ async def action(request):
         return JSONResponse({"error": message}, status_code=400)
 
 
-app = Starlette(middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])], routes=[Route("/", index), Route("/api/overview", overview), Route("/api/collections/{name}/documents", documents), Route("/api/{operation}", action, methods=["POST"])])
+@asynccontextmanager
+async def lifespan(app):
+    # Each startup needs a fresh MCP session manager.
+    rag_mcp.mcp._session_manager = None
+    rag_mcp.mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:8765", "localhost:8765"],
+        allowed_origins=["http://127.0.0.1:8765", "http://localhost:8765"],
+    )
+    app.state.mcp_app = rag_mcp.mcp.streamable_http_app()
+    async with rag_mcp.mcp.session_manager.run():
+        yield
+
+
+class MCPEndpoint:
+    async def __call__(self, scope, receive, send):
+        await scope["app"].state.mcp_app(scope, receive, send)
+
+
+app = Starlette(lifespan=lifespan, middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])], routes=[Route("/mcp", MCPEndpoint()), Route("/", index), Route("/api/overview", overview), Route("/api/collections/{name}/documents", documents), Route("/api/{operation}", action, methods=["POST"])])
 
 if __name__ == "__main__":
     import uvicorn

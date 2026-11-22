@@ -76,6 +76,24 @@ class DashboardTest(unittest.TestCase):
             self.assertEqual(rag_mcp.answer_question("collection", "question")["answer"], "Result [Source 1]")
             self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["model"], "custom-model")
 
+    def test_mcp_http_initialization_and_tool_discovery(self):
+        import json
+        with TestClient(dashboard.app, base_url="http://localhost:8765") as client:
+            headers = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
+            response = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}})
+            self.assertEqual(response.status_code, 200)
+            session = response.headers["mcp-session-id"]
+            headers["mcp-session-id"] = session
+            client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+            response = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            self.assertEqual(response.status_code, 200)
+            event = next(line[6:] for line in response.text.splitlines() if line.startswith("data: "))
+            names = [tool["name"] for tool in json.loads(event)["result"]["tools"]]
+            self.assertIn("search", names)
+            self.assertIn("answer_question", names)
+            denied = client.post("/mcp", headers={**headers, "origin": "https://evil.example"}, json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+            self.assertEqual(denied.status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()
