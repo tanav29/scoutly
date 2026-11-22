@@ -53,6 +53,11 @@ def collection(name):
     return col
 
 
+def raw_collection(name):
+    """Read a collection without requiring embedding metadata, for deletion."""
+    return client().get_collection(name)
+
+
 def ingest_text(collection_name, text, source, metadata=None):
     if not text.strip():
         raise ValueError("Document has no extractable text")
@@ -174,12 +179,39 @@ def list_documents(collection_name: str, limit: int = 100, offset: int = 0) -> d
 @audit
 def delete_document(collection_name: str, document_id: str) -> dict:
     """Delete a document and all of its chunks from a collection."""
-    col = collection(collection_name)
+    col = raw_collection(collection_name)
     ids = col.get(where={"document_id": document_id}, include=[])["ids"]
     if not ids:
         raise ValueError("Document not found")
     col.delete(ids=ids)
     return {"document_id": document_id, "deleted_chunks": len(ids)}
+
+
+@mcp.tool()
+@audit
+def delete_chunk(collection_name: str, chunk_id: str) -> dict:
+    """Delete one stored chunk by its ID."""
+    col = raw_collection(collection_name)
+    ids = col.get(ids=[chunk_id], include=[])["ids"]
+    if not ids:
+        raise ValueError("Chunk not found")
+    col.delete(ids=ids)
+    return {"id": chunk_id, "deleted": 1}
+
+
+@mcp.tool()
+@audit
+def update_chunk(collection_name: str, chunk_id: str, text: str) -> dict:
+    """Replace a chunk's text and re-embed it with the collection's model."""
+    if not text.strip():
+        raise ValueError("Chunk text must not be empty")
+    if len(text) > 100_000:
+        raise ValueError("Chunk text must be at most 100,000 characters")
+    col = collection(collection_name)
+    if not col.get(ids=[chunk_id], include=[])["ids"]:
+        raise ValueError("Chunk not found")
+    col.update(ids=[chunk_id], documents=[text], embeddings=embed([text], col.metadata["embedding_model"], col.metadata.get("embedding_provider", "openai")))
+    return {"id": chunk_id, "text": text}
 
 
 @mcp.tool()
@@ -217,8 +249,11 @@ def update_metadata(collection_name: str, document_id: str, metadata: dict) -> d
 
 @mcp.tool()
 @audit
-def search(collection_name: str, query: str, limit: int = 6, mode: str = "semantic", filters: dict | None = None) -> list[dict]:
-    """Search chunks with semantic or hybrid ranking and exact metadata filters."""
+def search(collection_name: str, query: str, limit: int | None = None, mode: str | None = None, filters: dict | None = None) -> list[dict]:
+    """Search chunks with semantic or hybrid ranking and exact metadata filters. Defaults come from dashboard server settings."""
+    config = settings.load()
+    limit = config["search_limit"] if limit is None else limit
+    mode = config["search_mode"] if mode is None else mode
     if not query.strip() or not 1 <= limit <= 100 or mode not in ("semantic", "hybrid"):
         raise ValueError("Provide a query, limit between 1 and 100, and mode semantic or hybrid")
     col = collection(collection_name)

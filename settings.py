@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-DEFAULT = {"provider": "openai", "model": "text-embedding-3-small", "api_key": "", "llm_provider": "openai", "llm_model": "gpt-4o-mini"}
+DEFAULT = {"provider": "openai", "model": "text-embedding-3-small", "api_key": "", "llm_provider": "openai", "llm_model": "gpt-4o-mini", "search_mode": "semantic", "search_limit": 6}
 
 
 def path():
@@ -34,6 +34,20 @@ def save_llm(provider, model):
         raise ValueError("Choose a provider and enter a valid model name")
     config = load()
     config.update(llm_provider=provider, llm_model=model.strip())
+    return write(config)
+
+
+def save_server(mode, limit):
+    if mode not in ("semantic", "hybrid"):
+        raise ValueError("Search mode must be semantic or hybrid")
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        raise ValueError("Search limit must be a whole number between 1 and 100")
+    if not 1 <= limit <= 100:
+        raise ValueError("Search limit must be between 1 and 100")
+    config = load()
+    config.update(search_mode=mode, search_limit=limit)
     return write(config)
 
 

@@ -76,6 +76,46 @@ class DashboardTest(unittest.TestCase):
             self.assertEqual(rag_mcp.answer_question("collection", "question")["answer"], "Result [Source 1]")
             self.assertEqual(openai.return_value.chat.completions.create.call_args.kwargs["model"], "custom-model")
 
+    def test_chunk_management_and_server_defaults(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, patch.dict(os.environ, {"VECTORVAULT_DATA_DIR": directory}), patch.object(rag_mcp, "embed", side_effect=lambda texts, *args: [[1.0, 0.0] for _ in texts]):
+            rag_mcp._client = None
+
+            with TestClient(dashboard.app, base_url="http://localhost") as client:
+                headers = {"origin": "http://localhost"}
+                client.post("/api/create", headers=headers, json={"name": "chunk_test"})
+                client.post("/api/ingest", headers=headers, json={"collection": "chunk_test", "kind": "text", "source": "notes", "content": "Original text"})
+                chunk = client.get("/api/collections/chunk_test/documents").json()["documents"][0]["chunks"][0]
+                self.assertIn("id", chunk)
+                response = client.post("/api/update-chunk", headers=headers, json={"collection": "chunk_test", "chunk_id": chunk["id"], "text": "Updated text"})
+                self.assertEqual(response.status_code, 200)
+                documents = client.get("/api/collections/chunk_test/documents").json()["documents"]
+                self.assertEqual(documents[0]["chunks"][0]["text"], "Updated text")
+                self.assertEqual(client.post("/api/update-chunk", headers=headers, json={"collection": "chunk_test", "chunk_id": chunk["id"], "text": "  "}).status_code, 400)
+                self.assertEqual(client.post("/api/server-settings", headers=headers, json={"mode": "hybrid", "limit": 3}).status_code, 200)
+                self.assertEqual(client.post("/api/server-settings", headers=headers, json={"mode": "invalid", "limit": 3}).status_code, 400)
+                overview = client.get("/api/overview").json()
+                self.assertEqual(overview["search_mode"], "hybrid")
+                self.assertEqual(overview["search_limit"], 3)
+                self.assertTrue(rag_mcp.search("chunk_test", "updated"))
+                self.assertEqual(client.post("/api/delete-chunk", headers=headers, json={"collection": "chunk_test", "chunk_id": chunk["id"]}).status_code, 200)
+                self.assertEqual(client.get("/api/collections/chunk_test/documents").json()["documents"], [])
+                client.post("/api/ingest", headers=headers, json={"collection": "chunk_test", "kind": "text", "source": "second", "content": "Second document"})
+                document_id = client.get("/api/collections/chunk_test/documents").json()["documents"][0]["id"]
+                self.assertEqual(client.post("/api/delete-document", headers=headers, json={"collection": "chunk_test", "document_id": document_id}).status_code, 200)
+                self.assertEqual(client.get("/api/collections/chunk_test/documents").json()["documents"], [])
+                self.assertEqual(client.post("/api/delete-collection", headers=headers, json={"name": "chunk_test"}).status_code, 200)
+                self.assertEqual(client.get("/api/overview").json()["collections"], [])
+            rag_mcp._client = None
+
+    def test_search_forwards_requested_limit_and_defaults(self):
+        with TestClient(dashboard.app, base_url="http://localhost") as client, patch.object(rag_mcp, "search", return_value=[]) as search:
+            headers = {"origin": "http://localhost"}
+            response = client.post("/api/search", headers=headers, json={"collection": "notes", "query": "hello", "mode": "hybrid", "limit": 3})
+            self.assertEqual(response.status_code, 200)
+            search.assert_called_with("notes", "hello", limit=3, mode="hybrid")
+            client.post("/api/search", headers=headers, json={"collection": "notes", "query": "hello"})
+            search.assert_called_with("notes", "hello", limit=None, mode=None)
+
     def test_mcp_http_initialization_and_tool_discovery(self):
         import json
         with TestClient(dashboard.app, base_url="http://localhost:8765") as client:
