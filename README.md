@@ -1,6 +1,10 @@
 # VectorVault MCP
 
-VectorVault provides a local dashboard and an MCP server for organizing and searching documents with embeddings.
+VectorVault is a local tool for building a retrieval-augmented generation (RAG) pipeline and giving an agent access to it through the Model Context Protocol (MCP). Its dashboard manages document collections and tests retrieval; its MCP server exposes those capabilities as tools to compatible agents.
+
+The pipeline extracts text from sources, splits it into overlapping chunks, embeds and stores those chunks in local collections, then retrieves relevant excerpts for a query. An optional answer model uses those excerpts to generate an answer with sources. Agents can also manage collections and documents directly through MCP.
+
+The server and collection storage run locally. Model processing can also be local with Ollama; selecting OpenAI sends content or queries to OpenAI, and importing a URL fetches it over the network.
 
 ## Start VectorVault
 
