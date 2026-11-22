@@ -26,7 +26,11 @@ Settings affect newly created collections. Each collection keeps its original pr
 
 ## Connect an MCP client
 
-Local imports support PDF, DOCX, PPTX, XLSX, HTML, and UTF-8 text formats: TXT, Markdown, CSV, TSV, JSON, JSONL, XML, LOG, and RST. Folder imports recursively discover these extensions and report individual failures. Office files are parsed locally with lightweight libraries. PDF extraction requires embedded text; scanned pages and images are not OCRed. Spreadsheet formulas use the cached values saved by the spreadsheet application. Legacy Office formats such as DOC and XLS are not supported; save them in the newer formats first.
+Local imports support PDF, PNG, JPEG, TIFF, BMP, WebP, DOCX, PPTX, XLSX, HTML, and UTF-8 text formats: TXT, Markdown, CSV, TSV, JSON, JSONL, XML, LOG, and RST. Folder imports recursively discover these extensions and report individual failures. Office files are parsed locally with lightweight libraries. Spreadsheet formulas use the cached values saved by the spreadsheet application. Legacy Office formats such as DOC and XLS are not supported; save them in the newer formats first.
+
+For OCR, install Tesseract and its language data separately and ensure `tesseract` is on PATH, or set `VECTORVAULT_TESSERACT` to its executable path. For scanned PDF pages also run `uv sync --locked --extra ocr` to install PDF rendering support. Image files are OCRed locally; PDF pages with embedded text use that text, while pages without text that contain images are rendered and OCRed. OCR defaults to English; set `VECTORVAULT_OCR_LANG` to an installed Tesseract language code (or codes joined by `+`). Pages containing both selectable text and scanned images are not OCRed. OCR quality depends on image quality and language data.
+
+When starting with `uv run`, include the extra so it remains installed: `uv run --locked --extra ocr python dashboard.py`. Use the same `--extra ocr` arguments for the stdio MCP command if it needs scanned PDF support.
 
 For a client that supports Streamable HTTP, configure a server named `vectorvault` with URL `http://127.0.0.1:8765/mcp`. Keep `dashboard.py` running while the client is connected. The dashboard offers a copyable prompt to help an agent configure this connection. MCP client configuration formats vary by application. The HTTP endpoint is local and unauthenticated; only connect trusted clients and do not expose the port to a network.
 

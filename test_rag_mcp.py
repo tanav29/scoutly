@@ -8,6 +8,35 @@ import rag_mcp as server
 
 
 class RagServerTest(unittest.TestCase):
+    def test_image_ocr_and_missing_tesseract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / 'scan.png'
+            image.write_bytes(b'image')
+            with patch.object(server.subprocess, 'run') as run:
+                run.return_value.stdout = b'recognized text'
+                self.assertEqual(server.extract_file(image), 'recognized text')
+                self.assertEqual(run.call_args.args[0][1], str(image))
+            with patch.object(server.subprocess, 'run', side_effect=FileNotFoundError):
+                with self.assertRaisesRegex(ValueError, 'Tesseract'):
+                    server.extract_file(image)
+
+    def test_scanned_pdf_page_uses_ocr(self):
+        try:
+            import pypdfium2  # noqa: F401
+        except ImportError:
+            self.skipTest('PDF OCR extra is not installed')
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / 'scan.pdf'
+            image = Image.new('RGB', (100, 100), 'white')
+            try:
+                image.save(file, 'PDF')
+            finally:
+                image.close()
+            with patch.object(server, 'ocr_image', return_value='scanned text') as ocr:
+                self.assertEqual(server.extract_file(file), 'scanned text')
+                ocr.assert_called_once()
+
     def test_file_formats_and_folder_errors(self):
         from docx import Document
         from openpyxl import Workbook

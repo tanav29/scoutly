@@ -1149,7 +1149,7 @@ function updateSourceFields() {
   const kind = $('kind').value;
   const labels = { file: 'File path', folder: 'Folder path', url: 'Web URL', text: 'Source name' };
   const hints = {
-    file: 'Path on the server. Supports PDF, DOCX, PPTX, XLSX, HTML, and text formats including CSV and JSON.',
+    file: 'Path on the server. Supports PDF, images, DOCX, PPTX, XLSX, HTML, and text formats. OCR requires local setup.',
     folder: 'Every supported file in this folder is ingested. Individual errors are reported.',
     url: 'Must return HTML or plain text.',
     text: 'A stable name for this content. Re-adding the same source replaces its chunks.'

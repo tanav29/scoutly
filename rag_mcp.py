@@ -2,6 +2,8 @@
 import hashlib
 import os
 import re
+import subprocess
+import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -17,7 +19,53 @@ import settings
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".log", ".rst"}
-SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | IMAGE_EXTENSIONS | {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
+
+
+def ocr_image(file: Path) -> str:
+    """Run local Tesseract; OCR language defaults to English."""
+    try:
+        result = subprocess.run(
+            [os.getenv("VECTORVAULT_TESSERACT", "tesseract"), str(file), "stdout", "-l", os.getenv("VECTORVAULT_OCR_LANG", "eng")],
+            capture_output=True, timeout=120, check=True,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError("OCR requires Tesseract on PATH or VECTORVAULT_TESSERACT set to its executable") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("OCR timed out after 120 seconds") from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("OCR failed; check the image and installed Tesseract language data") from exc
+    return result.stdout.decode("utf-8", errors="replace")
+
+
+def extract_pdf(file: Path) -> str:
+    pdf_pages = PdfReader(str(file)).pages
+    pages = [page.extract_text() or "" for page in pdf_pages]
+    missing = [index for index, text in enumerate(pages) if not text.strip() and len(pdf_pages[index].images)]
+    if missing:
+        try:
+            import pypdfium2 as pdfium
+        except ImportError as exc:
+            raise ValueError("Scanned PDF pages require OCR support: install with uv sync --locked --extra ocr and install Tesseract") from exc
+        with pdfium.PdfDocument(str(file)) as document, tempfile.TemporaryDirectory() as directory:
+            for index in missing:
+                page = document[index]
+                try:
+                    bitmap = page.render(scale=2)
+                    try:
+                        image = bitmap.to_pil()
+                        try:
+                            target = Path(directory) / f"page-{index}.png"
+                            image.save(target)
+                        finally:
+                            image.close()
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+                pages[index] = ocr_image(target)
+    return "\n".join(pages)
 
 
 class _HTMLText(HTMLParser):
@@ -42,12 +90,14 @@ class _HTMLText(HTMLParser):
 
 
 def extract_file(file: Path) -> str:
-    """Extract text using lightweight, format-specific parsers; no OCR is performed."""
+    """Extract text locally, using OCR for images and PDF pages without text."""
     suffix = file.suffix.lower()
     if suffix in TEXT_EXTENSIONS:
         return file.read_text(encoding="utf-8-sig")
     if suffix == ".pdf":
-        return "\n".join(page.extract_text() or "" for page in PdfReader(str(file)).pages)
+        return extract_pdf(file)
+    if suffix in IMAGE_EXTENSIONS:
+        return ocr_image(file)
     if suffix in (".html", ".htm"):
         parser = _HTMLText()
         parser.feed(file.read_text(encoding="utf-8-sig"))
