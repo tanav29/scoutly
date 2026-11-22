@@ -8,6 +8,38 @@ import rag_mcp as server
 
 
 class RagServerTest(unittest.TestCase):
+    def test_file_formats_and_folder_errors(self):
+        from docx import Document
+        from openpyxl import Workbook
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            doc = Document()
+            doc.add_paragraph('word content')
+            doc.add_table(rows=1, cols=1).cell(0, 0).text = 'table content'
+            doc.save(root / 'a.docx')
+            book = Workbook()
+            book.active['A1'] = 'spreadsheet content'
+            book.save(root / 'b.xlsx')
+            presentation = Presentation()
+            slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+            slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1)).text = 'slide content'
+            presentation.save(root / 'c.pptx')
+            (root / 'd.html').write_text('<p>visible</p><script>hidden</script>', encoding='utf-8')
+            (root / 'e.csv').write_text('name,value\napple,2', encoding='utf-8')
+            (root / 'bad.docx').write_text('broken', encoding='utf-8')
+            self.assertIn('table content', server.extract_file(root / 'a.docx'))
+            self.assertIn('spreadsheet content', server.extract_file(root / 'b.xlsx'))
+            self.assertIn('slide content', server.extract_file(root / 'c.pptx'))
+            self.assertNotIn('hidden', server.extract_file(root / 'd.html'))
+            self.assertIn('apple,2', server.extract_file(root / 'e.csv'))
+            with patch.object(server, 'ingest_text', side_effect=lambda collection, text, source, metadata: {'source': source}):
+                result = server.ingest_folder('test', str(root))
+            self.assertEqual(len(result['documents']), 5)
+            self.assertEqual(len(result['errors']), 1)
+
     @patch.object(server, "embed", side_effect=lambda texts, *args: [[1.0, 0.0] for _ in texts])
     def test_document_lifecycle(self, mock_embed):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:

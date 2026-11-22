@@ -2,6 +2,7 @@
 import hashlib
 import os
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 import chromadb
@@ -15,6 +16,71 @@ from activity import audit
 import settings
 
 EMBEDDING_MODEL = "text-embedding-3-small"
+TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".log", ".rst"}
+SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
+
+
+class _HTMLText(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.hidden += 1
+        elif tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def extract_file(file: Path) -> str:
+    """Extract text using lightweight, format-specific parsers; no OCR is performed."""
+    suffix = file.suffix.lower()
+    if suffix in TEXT_EXTENSIONS:
+        return file.read_text(encoding="utf-8-sig")
+    if suffix == ".pdf":
+        return "\n".join(page.extract_text() or "" for page in PdfReader(str(file)).pages)
+    if suffix in (".html", ".htm"):
+        parser = _HTMLText()
+        parser.feed(file.read_text(encoding="utf-8-sig"))
+        return "".join(parser.parts)
+    if suffix == ".docx":
+        from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        document = Document(str(file))
+        return "\n".join(block.text if isinstance(block, Paragraph) else "\n".join("\t".join(cell.text for cell in row.cells) for row in block.rows) for block in document.iter_inner_content() if isinstance(block, (Paragraph, Table)))
+    if suffix == ".pptx":
+        from pptx import Presentation
+        lines = []
+        for slide in Presentation(str(file)).slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    lines.append(shape.text_frame.text)
+                if shape.has_table:
+                    lines.extend("\t".join(cell.text for cell in row.cells) for row in shape.table.rows)
+        return "\n".join(lines)
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+        workbook = load_workbook(file, read_only=True, data_only=True)
+        try:
+            lines = []
+            for sheet in workbook:
+                lines.append(sheet.title)
+                for row in sheet.iter_rows(values_only=True):
+                    lines.append("\t".join("" if value is None else str(value) for value in row))
+            return "\n".join(lines)
+        finally:
+            workbook.close()
+    raise ValueError("Unsupported file type: " + suffix)
 
 
 def embed(texts: list[str], model: str | None = None, provider: str | None = None) -> list[list[float]]:
@@ -106,14 +172,9 @@ def delete_collection(name: str) -> dict:
 @mcp.tool()
 @audit
 def ingest_document(collection_name: str, path: str, metadata: dict | None = None) -> dict:
-    """Ingest a local UTF-8 text, Markdown, or PDF file."""
+    """Ingest a supported local document, spreadsheet, presentation, or text file."""
     file = Path(path).resolve(strict=True)
-    if file.suffix.lower() == ".pdf":
-        text = "\n".join(page.extract_text() or "" for page in PdfReader(str(file)).pages)
-    elif file.suffix.lower() in (".txt", ".md", ".markdown"):
-        text = file.read_text(encoding="utf-8")
-    else:
-        raise ValueError("Supported file types: .txt, .md, .markdown, .pdf")
+    text = extract_file(file)
     return ingest_text(collection_name, text, str(file), metadata)
 
 
@@ -126,7 +187,7 @@ def ingest_folder(collection_name: str, path: str, metadata: dict | None = None)
         raise ValueError("path must be a directory")
     results, errors = [], []
     for file in sorted(folder.rglob("*")):
-        if file.is_file() and file.suffix.lower() in (".txt", ".md", ".markdown", ".pdf"):
+        if file.is_file() and file.suffix.lower() in SUPPORTED_EXTENSIONS:
             try:
                 results.append(ingest_document(collection_name, str(file), metadata))
             except Exception as exc:
