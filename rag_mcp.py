@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from pypdf import PdfReader
 
 from openai import OpenAI
+from activity import audit
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 
@@ -61,6 +62,7 @@ def ingest_text(collection_name, text, source, metadata=None):
 
 
 @mcp.tool()
+@audit
 def create_collection(name: str) -> dict:
     """Create a named collection. Existing names are rejected."""
     client().create_collection(name, metadata={"hnsw:space": "cosine", "embedding_model": EMBEDDING_MODEL})
@@ -68,12 +70,14 @@ def create_collection(name: str) -> dict:
 
 
 @mcp.tool()
+@audit
 def list_collections() -> list[str]:
     """List available collections."""
     return [c.name for c in client().list_collections()]
 
 
 @mcp.tool()
+@audit
 def delete_collection(name: str) -> dict:
     """Delete a collection and all its documents permanently."""
     client().delete_collection(name)
@@ -81,6 +85,7 @@ def delete_collection(name: str) -> dict:
 
 
 @mcp.tool()
+@audit
 def ingest_document(collection_name: str, path: str, metadata: dict | None = None) -> dict:
     """Ingest a local UTF-8 text, Markdown, or PDF file."""
     file = Path(path).resolve(strict=True)
@@ -94,6 +99,7 @@ def ingest_document(collection_name: str, path: str, metadata: dict | None = Non
 
 
 @mcp.tool()
+@audit
 def ingest_folder(collection_name: str, path: str, metadata: dict | None = None) -> dict:
     """Recursively ingest supported files, reporting individual failures."""
     folder = Path(path).resolve(strict=True)
@@ -110,6 +116,7 @@ def ingest_folder(collection_name: str, path: str, metadata: dict | None = None)
 
 
 @mcp.tool()
+@audit
 def ingest_url(collection_name: str, url: str, metadata: dict | None = None) -> dict:
     """Fetch and ingest an HTTP(S) webpage or plain text URL."""
     if not url.startswith(("https://", "http://")):
@@ -127,6 +134,7 @@ def ingest_url(collection_name: str, url: str, metadata: dict | None = None) -> 
 
 
 @mcp.tool()
+@audit
 def ingest_content(collection_name: str, content: str, source: str, metadata: dict | None = None) -> dict:
     """Ingest text supplied directly by an agent, using a stable source identifier."""
     if not source.strip():
@@ -135,6 +143,7 @@ def ingest_content(collection_name: str, content: str, source: str, metadata: di
 
 
 @mcp.tool()
+@audit
 def list_documents(collection_name: str, limit: int = 100, offset: int = 0) -> dict:
     """List documents in a collection, ordered by document ID, with pagination."""
     if not 1 <= limit <= 1000 or offset < 0:
@@ -148,6 +157,7 @@ def list_documents(collection_name: str, limit: int = 100, offset: int = 0) -> d
 
 
 @mcp.tool()
+@audit
 def delete_document(collection_name: str, document_id: str) -> dict:
     """Delete a document and all of its chunks from a collection."""
     col = collection(collection_name)
@@ -159,6 +169,7 @@ def delete_document(collection_name: str, document_id: str) -> dict:
 
 
 @mcp.tool()
+@audit
 def collection_info(collection_name: str) -> dict:
     """Inspect the collection's embedding model and stored chunk count."""
     col = collection(collection_name)
@@ -166,6 +177,7 @@ def collection_info(collection_name: str) -> dict:
 
 
 @mcp.tool()
+@audit
 def get_document(collection_name: str, document_id: str) -> dict:
     """Retrieve a document's chunks and metadata in order."""
     result = collection(collection_name).get(where={"document_id": document_id}, include=["documents", "metadatas"])
@@ -176,6 +188,7 @@ def get_document(collection_name: str, document_id: str) -> dict:
 
 
 @mcp.tool()
+@audit
 def update_metadata(collection_name: str, document_id: str, metadata: dict) -> dict:
     """Merge scalar metadata into every chunk of a document."""
     if any(k in metadata for k in ("document_id", "source", "ordinal")) or any(not isinstance(v, (str, int, float, bool)) for v in metadata.values()):
@@ -189,6 +202,7 @@ def update_metadata(collection_name: str, document_id: str, metadata: dict) -> d
 
 
 @mcp.tool()
+@audit
 def search(collection_name: str, query: str, limit: int = 6, mode: str = "semantic", filters: dict | None = None) -> list[dict]:
     """Search chunks with semantic or hybrid ranking and exact metadata filters."""
     if not query.strip() or not 1 <= limit <= 100 or mode not in ("semantic", "hybrid"):

@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "vectorvault-mcp"
 version = "0.2.0"
 description = "A local MCP server for retrieval over document collections"
@@ -11,4 +11,5 @@ dependencies = [
     "openai>=1.60.0",
     "pypdf>=6.7.0",
     "trafilatura>=2.0.0",
+    "uvicorn>=0.34.0",
 ]
